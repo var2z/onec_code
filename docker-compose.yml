@@ -1,0 +1,25 @@
+services:
+  onec-code:
+    build:
+      context: .
+      target: runtime
+    image: onec-code:latest
+    container_name: onec-code
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8002:8002"   # MCP (streamable HTTP): http://localhost:8002/mcp
+      - "127.0.0.1:8003:8003"   # upload web UI:          http://localhost:8003
+    environment:
+      ONEC_WORKERS: "4"         # parser processes during indexing (RAM!), see README
+      ONEC_INBOX_SCAN: "60"     # inbox rescan period, seconds (0 = only at start / reindex)
+    volumes:
+      - ./inbox:/inbox:ro       # zip dumps; never written
+      - onec-index:/data        # SQLite index
+      - onec-archives:/archives # archives uploaded via the web UI
+    stop_grace_period: 30s
+
+volumes:
+  onec-index:
+    name: onec-index
+  onec-archives:
+    name: onec-archives

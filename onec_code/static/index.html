@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Конфигурации 1С — загрузка</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --fg:#1d2330; --muted:#6b7385; --line:#e3e6ec; --acc:#2f6fed; --ok:#1f9d55;
+          --err:#d64545; --warn:#c77d00; --bar:#e8edf8; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14171d; --card:#1c2029; --fg:#e6e9ef; --muted:#9aa3b5; --line:#2b313d; --acc:#5b8dff; --ok:#3cc47c;
+            --err:#ff6b6b; --warn:#f0b04a; --bar:#262c38; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width:1180px; margin:0 auto; padding:24px 16px 48px; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  .sub { color:var(--muted); margin-bottom:20px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:18px; }
+  form { display:grid; grid-template-columns: minmax(180px, 1fr) minmax(220px, 2fr) auto auto; gap:12px; align-items:end; }
+  @media (max-width: 760px) { form { grid-template-columns: 1fr; } }
+  label.f { display:flex; flex-direction:column; gap:4px; color:var(--muted); font-size:12px; }
+  input[type=text], input[type=file] { font:inherit; color:var(--fg); background:var(--bg); border:1px solid var(--line);
+      border-radius:6px; padding:7px 9px; width:100%; }
+  .chk { display:flex; gap:6px; align-items:center; white-space:nowrap; padding-bottom:8px; }
+  button { font:inherit; border:1px solid var(--line); background:var(--card); color:var(--fg); border-radius:6px;
+      padding:6px 11px; cursor:pointer; }
+  button.primary { background:var(--acc); border-color:var(--acc); color:#fff; padding:8px 16px; }
+  button:disabled { opacity:.5; cursor:default; }
+  button.danger:hover { border-color:var(--err); color:var(--err); }
+  .bar { height:8px; background:var(--bar); border-radius:4px; overflow:hidden; margin-top:6px; }
+  .bar > div { height:100%; background:var(--acc); width:0; transition:width .3s; }
+  #upmsg { margin-top:10px; min-height:20px; }
+  .err { color:var(--err); } .ok { color:var(--ok); } .muted { color:var(--muted); } .warn { color:var(--warn); }
+  table { width:100%; border-collapse:collapse; }
+  th, td { text-align:left; padding:9px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:500; font-size:12px; }
+  td.num { white-space:nowrap; }
+  .actions { display:flex; gap:6px; flex-wrap:wrap; }
+  .badge { display:inline-block; padding:1px 8px; border-radius:10px; font-size:12px; border:1px solid currentColor; }
+  .tablewrap { overflow-x:auto; }
+  .small { font-size:12px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Конфигурации 1С</h1>
+  <div class="sub">Загрузка выгрузок конфигурации (zip из «Выгрузить конфигурацию в файлы») для MCP-сервера
+    <code>http://localhost:8002/mcp</code>. Папка inbox тоже работает: метка = имя файла.</div>
+
+  <div class="card">
+    <form id="f">
+      <label class="f">Название (метка снимка)
+        <input type="text" id="title" placeholder="например, УТ 11.5" maxlength="100" required></label>
+      <label class="f">Архив zip
+        <input type="file" id="file" accept=".zip,application/zip" required></label>
+      <label class="chk"><input type="checkbox" id="del"> Удалить архив после индексации</label>
+      <button class="primary" id="go" type="submit">Загрузить</button>
+    </form>
+    <div class="bar" id="upbar" hidden><div></div></div>
+    <div id="upmsg" class="muted"></div>
+  </div>
+
+  <div class="card">
+    <div id="notes"></div>
+    <div class="tablewrap">
+    <table>
+      <thead><tr><th>Название</th><th>Конфигурация</th><th>Загружен</th><th>Архив</th><th>Модулей / методов</th>
+        <th>Статус</th><th></th></tr></thead>
+      <tbody id="rows"><tr><td colspan="7" class="muted">Загрузка…</td></tr></tbody>
+    </table>
+    </div>
+  </div>
+</main>
+<script>
+const STAGES = {scan:'чтение списка файлов', parse:'разбор файлов', nodes:'построение узлов', edges:'построение связей',
+  extensions:'связи расширений', gc:'очистка', optimize:'оптимизация индекса', '':'завершение'};
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const mb = n => n == null ? '—' : (n >= 1e9 ? (n/1e9).toFixed(2)+' ГБ' : (n/1e6).toFixed(1)+' МБ');
+const dt = s => s ? s.replace('T',' ').slice(0,16) : '—';
+let uploading = false, timer = null;
+
+async function api(method, url, body) {
+  const r = await fetch(url, {method, headers: body ? {'Content-Type':'application/json'} : {},
+                              body: body ? JSON.stringify(body) : undefined});
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || j.detail || r.statusText);
+  return j;
+}
+
+function statusCell(s) {
+  const p = s.progress;
+  if (s.status === 'indexing' && p) {
+    const pct = p.total ? Math.round(100 * p.done / p.total) : null;
+    return `<span class="badge warn">индексируется</span>
+      <div class="small muted">${esc(STAGES[p.stage] ?? p.stage)}${p.total ? ` ${p.done}/${p.total}` : ''} · ${p.elapsed ?? 0} с</div>
+      ${pct != null ? `<div class="bar"><div style="width:${pct}%"></div></div>` : ''}`;
+  }
+  if (s.status === 'indexing') return '<span class="badge warn">индексируется</span>';
+  if (s.status === 'deleting') return '<span class="badge warn">удаляется</span>';
+  if (s.status === 'queued') return '<span class="badge muted">в очереди</span>';
+  if (s.status === 'ready+queued') return '<span class="badge ok">готово</span> <span class="small muted">· в очереди</span>';
+  if (s.status === 'error') return `<span class="badge err">ошибка</span><div class="small err">${esc(s.error)}</div>`;
+  if (s.status === 'ready') return '<span class="badge ok">готово</span>' + (s.error ? `<div class="small warn">${esc(s.error)}</div>` : '');
+  return esc(s.status);
+}
+
+function render(data) {
+  $('#notes').innerHTML = (data.notes || []).map(n => `<div class="warn small">⚠ ${esc(n)}</div>`).join('');
+  const rows = data.snapshots.map(s => {
+    const src = s.origin === 'upload' ? (s.source_exists ? mb(s.source_size) : `${mb(s.source_size)} <span class="small muted">(удалён)</span>`)
+              : `<span class="small muted">${s.origin === 'dir' ? 'папка inbox' : 'inbox'}</span> ${mb(s.source_size)}`;
+    const busy = ['indexing','deleting','queued'].includes(s.status);
+    const canReindex = s.source_exists && !busy;
+    return `<tr>
+      <td><b>${esc(s.label)}</b>${s.is_extension ? ' <span class="small muted">расширение</span>' : ''}</td>
+      <td>${esc(s.config_name || '—')}<div class="small muted">${esc(s.config_version || '')}</div></td>
+      <td class="num">${dt(s.created_at)}<div class="small muted">индекс: ${dt(s.indexed_at)}</div></td>
+      <td class="num">${src}</td>
+      <td class="num">${s.modules ?? '—'} / ${s.methods ?? '—'}</td>
+      <td>${statusCell(s)}</td>
+      <td><div class="actions">
+        <button onclick="renameSnap(${s.id}, '${esc(s.label).replace(/'/g, "\\'")}')">Переименовать</button>
+        <button onclick="reindexSnap(${s.id}, event)" ${canReindex ? '' : 'disabled'} title="Shift+клик — полная переиндексация">Переиндексировать</button>
+        <button class="danger" onclick="deleteSnap(${s.id}, '${esc(s.label).replace(/'/g, "\\'")}')" ${s.status === 'deleting' ? 'disabled' : ''}>Удалить</button>
+      </div></td></tr>`;
+  });
+  $('#rows').innerHTML = rows.join('') || '<tr><td colspan="7" class="muted">Снимков пока нет</td></tr>';
+}
+
+async function refresh() {
+  clearTimeout(timer);
+  try {
+    const data = await api('GET', '/api/snapshots');
+    render(data);
+    timer = setTimeout(refresh, data.busy || uploading ? 1500 : 6000);
+  } catch (e) {
+    $('#rows').innerHTML = `<tr><td colspan="7" class="err">${esc(e.message)}</td></tr>`;
+    timer = setTimeout(refresh, 5000);
+  }
+}
+
+async function renameSnap(id, old) {
+  const v = prompt('Новое название', old);
+  if (v == null || v.trim() === old) return;
+  try { await api('POST', `/api/snapshots/${id}/rename`, {label: v}); refresh(); } catch (e) { alert(e.message); }
+}
+async function reindexSnap(id, ev) {
+  const full = ev.shiftKey;
+  try { await api('POST', `/api/snapshots/${id}/reindex?full=${full}`); refresh(); } catch (e) { alert(e.message); }
+}
+async function deleteSnap(id, label) {
+  if (!confirm(`Удалить снимок «${label}» из индекса?` )) return;
+  try { await api('DELETE', `/api/snapshots/${id}`); refresh(); } catch (e) { alert(e.message); }
+}
+
+$('#f').addEventListener('submit', async ev => {
+  ev.preventDefault();
+  const title = $('#title').value.trim(), file = $('#file').files[0], del = $('#del').checked;
+  const msg = $('#upmsg');
+  if (!title || !file) return;
+  msg.className = 'muted'; msg.textContent = 'Проверка названия…';
+  try { await api('GET', `/api/check?title=${encodeURIComponent(title)}`); }
+  catch (e) { msg.className = 'err'; msg.textContent = e.message; return; }
+  uploading = true; $('#go').disabled = true;
+  const bar = $('#upbar'), fill = bar.firstElementChild; bar.hidden = false; fill.style.width = '0';
+  const t0 = Date.now();
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', `/api/upload?title=${encodeURIComponent(title)}&delete_after=${del}`);
+  xhr.setRequestHeader('Content-Type', 'application/zip');
+  xhr.upload.onprogress = e => {
+    if (!e.lengthComputable) return;
+    const pct = 100 * e.loaded / e.total, s = (Date.now() - t0) / 1000;
+    fill.style.width = pct.toFixed(1) + '%';
+    msg.className = 'muted';
+    msg.textContent = `Загрузка: ${mb(e.loaded)} из ${mb(e.total)} (${pct.toFixed(0)}%)` + (s > 1 ? `, ${mb(e.loaded / s)}/с` : '');
+  };
+  xhr.onload = () => {
+    uploading = false; $('#go').disabled = false; bar.hidden = true;
+    let j = {}; try { j = JSON.parse(xhr.responseText); } catch (e) {}
+    if (xhr.status === 200) {
+      msg.className = 'ok'; msg.textContent = `Загружено (${mb(j.size)} за ${j.seconds} с). Индексация поставлена в очередь — прогресс в таблице.`;
+      $('#f').reset();
+    } else { msg.className = 'err'; msg.textContent = j.error || `Ошибка ${xhr.status}`; }
+    refresh();
+  };
+  xhr.onerror = () => { uploading = false; $('#go').disabled = false; bar.hidden = true;
+    msg.className = 'err'; msg.textContent = 'Сетевая ошибка при загрузке'; };
+  xhr.send(file);
+  refresh();
+});
+
+refresh();
+</script>
+</body>
+</html>

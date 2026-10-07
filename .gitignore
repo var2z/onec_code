@@ -1,0 +1,34 @@
+# Выгрузки конфигураций 1С: большие архивы и папки, могут содержать код клиентов
+inbox/*
+!inbox/.gitkeep
+*.zip
+
+# Секреты
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+*.egg-info/
+.coverage
+htmlcov/
+
+# Локальные настройки Claude Code (общие правила проекта можно хранить в .claude/settings.json)
+.claude/settings.local.json
+
+# Редакторы и ОС
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Логи и временные файлы
+*.log
+*.tmp

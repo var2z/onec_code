@@ -1,0 +1,6 @@
+inbox
+*.zip
+.git
+**/__pycache__
+**/*.pyc
+.pytest_cache
