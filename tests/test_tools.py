@@ -1,3 +1,4 @@
+import os
 import time
 import zipfile
 
@@ -202,6 +203,32 @@ def test_extension_in_tools(env):
     assert 'перехват &Перед: Документ.Заказ.МодульОбъекта.Р_ОбработкаПроведения [расширение расш]' in t
     t = tools.find_callers(conn, 'ОбработкаПроведения', 'Документ.Заказ.МодульОбъекта', config='УТ 11.5')
     assert 'extension_intercepts' in t
+
+
+def test_inbox_waits_for_copy(tmp_path):
+    """An archive still being copied into inbox is not indexed: no snapshot until it is a stable, complete zip."""
+    from onec_code.service import IndexService
+    inbox = tmp_path / 'inbox'
+    inbox.mkdir()
+    full = tmp_path / 'full.zip'
+    write_zip(str(full), base_files())
+    data = full.read_bytes()
+    target = inbox / 'ут.zip'
+    target.write_bytes(data[:len(data) // 2])                 # copy in progress
+    svc = IndexService(str(tmp_path / 'i.db'), str(inbox), str(tmp_path / 'a'), workers=1, inbox_scan_seconds=3600)
+    svc.start()                                                # first scan: just noticed
+    conn = svc._write_conn()
+    assert conn.execute('SELECT COUNT(*) FROM snapshots').fetchone()[0] == 0
+    assert 'жду' in ' '.join(svc.notes)
+    svc.sync_inbox()                                           # unchanged, but not a complete zip
+    assert conn.execute('SELECT COUNT(*) FROM snapshots').fetchone()[0] == 0
+    assert 'не докопирован' in ' '.join(svc.notes)
+    target.write_bytes(data)                                   # copy finished
+    os.utime(target, ns=(time.time_ns(), time.time_ns() + 10**9))
+    svc.sync_inbox()
+    assert conn.execute('SELECT COUNT(*) FROM snapshots').fetchone()[0] == 0     # changed again: wait one scan
+    assert svc.sync_inbox() == ['новый снимок ут']
+    assert svc.notes == []
 
 
 def test_web_upload(tmp_path):
