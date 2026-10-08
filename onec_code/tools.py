@@ -1232,6 +1232,23 @@ def _same_form(conn, ca, cb) -> bool:
     return conn.execute(q, (ca,)).fetchall() == conn.execute(q, (cb,)).fetchall()
 
 
+def _type_delta(ta: list, tb: list, show=4) -> str:
+    """Short description of a type change: whole types for small ones, otherwise only added/removed parts
+    (a composite type of 30 documents gaining one should not print 60 names)."""
+    if len(ta) <= 2 and len(tb) <= 2:
+        return f'{fmt_types(ta)} → {fmt_types(tb)}'
+    plus = [t for t in tb if t not in ta]
+    minus = [t for t in ta if t not in tb]
+
+    def part(sign, lst):
+        if not lst:
+            return ''
+        s = ', '.join(sign + fmt_types([t]) for t in lst[:show])
+        return s + (f' … ещё {len(lst) - show}' if len(lst) > show else '')
+
+    return ', '.join(x for x in (part('+', plus), part('−', minus)) if x) or 'порядок/квалификаторы'
+
+
 def _object_diff(conn, ca, cb) -> str:
     a, b = db.unjz(conn.execute('SELECT parsed FROM contents WHERE id=?', (ca,)).fetchone()[0]), \
         db.unjz(conn.execute('SELECT parsed FROM contents WHERE id=?', (cb,)).fetchone()[0])
@@ -1254,7 +1271,8 @@ def _object_diff(conn, ca, cb) -> str:
     if minus:
         out.append('-' + ', -'.join(minus[:15]) + (' …' if len(minus) > 15 else ''))
     if types:
-        out.append('тип изменён: ' + ', '.join(f'{k} ({fmt_types(da[k])} → {fmt_types(db_[k])})' for k in types[:5]))
+        out.append('тип изменён: ' + ', '.join(f'{k} ({_type_delta(da[k], db_[k])})' for k in types[:5])
+                   + (f' … (ещё {len(types) - 5})' if len(types) > 5 else ''))
     for key, title in (('forms', 'формы'), ('commands', 'команды')):
         x, y = set(map(str, a[key])), set(map(str, b[key]))
         if x != y:

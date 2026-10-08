@@ -176,6 +176,16 @@ def test_versions(env):
     assert 'В других снимках текст отличается' in t
 
 
+def test_type_delta():
+    from onec_code.tools import _type_delta
+    docs = [f'ref:Документ.Д{i}' for i in range(30)]
+    t = _type_delta(docs, docs + ['ref:Документ.Новый'])
+    assert t == '+Документ.Новый', t                                  # only the delta, not 60 names
+    t = _type_delta(docs, docs[1:] + ['ref:Документ.А', 'ref:Документ.Б'])
+    assert '+Документ.А' in t and '+Документ.Б' in t and '−Документ.Д0' in t
+    assert _type_delta(['prim:Строка(10)'], ['prim:Строка(25)']).count('→') == 1   # small types: old → new
+
+
 def test_ids_not_reused_after_delete(env):
     conn, tmp = env
     z = str(tmp / 'c.zip')
