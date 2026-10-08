@@ -40,6 +40,7 @@ class IndexService:
         self.notes: list[str] = []             # inbox conflicts etc.
         self._conn = None
         self.wlock = threading.RLock()        # guards the shared service connection
+        self._seen: dict[str, tuple] = {}     # inbox zip path -> (size, mtime_ns) at the previous scan
 
     # -------------------------------------------------------------- lifecycle
 
@@ -162,9 +163,23 @@ class IndexService:
                 present[p] = name
         known = {r['source_path']: r for r in conn.execute("SELECT * FROM snapshots WHERE origin IN ('inbox', 'dir')")}
         notes = []
+        seen, self._seen = self._seen, {}
         for path, label in present.items():
             st = os.stat(path)
             row = known.get(path)
+            is_new_or_changed = row is None or (os.path.isfile(path) and (
+                row['source_size'] != st.st_size or row['source_mtime'] != int(st.st_mtime)))
+            if os.path.isfile(path) and is_new_or_changed:
+                # an archive being copied: wait until it stops changing and is a complete zip
+                stamp = (st.st_size, st.st_mtime_ns)
+                self._seen[path] = stamp
+                if self.scan_every > 0 and seen.get(path) != stamp:
+                    notes.append(f'inbox/{os.path.basename(path)}: файл появился или изменился — жду, пока '
+                                 'закончится копирование (до следующей проверки)')
+                    continue
+                if not zipfile.is_zipfile(path):
+                    notes.append(f'inbox/{os.path.basename(path)}: не zip-архив или архив не докопирован')
+                    continue
             if row is None:
                 try:
                     sid = indexer.create_snapshot(conn, label, 'inbox' if path.endswith('.zip') else 'dir', path)
