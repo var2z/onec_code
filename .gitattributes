@@ -1,0 +1,7 @@
+# Code runs in a Linux container: keep LF everywhere, regardless of core.autocrlf on Windows
+* text=auto eol=lf
+
+# Binary files (never converted)
+*.zip binary
+*.png binary
+*.ico binary
